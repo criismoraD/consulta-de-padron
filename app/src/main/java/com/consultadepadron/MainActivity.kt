@@ -256,6 +256,8 @@ private fun ConsultaPadronPantalla(viewModel: PadronViewModel) {
                     onEstadoSeleccionado = viewModel::filtrarPorEstado,
                     onInstitucionSeleccionada = viewModel::filtrarPorInstitucion,
                     onAbrirInstituciones = { mostrarInstituciones = true },
+                    onTamanoSeleccionado = viewModel::cambiarTamanoPagina,
+                    onCargarMas = viewModel::cargarMas,
                     onCopiar = { valor ->
                         copiarAlPortapapeles(contexto, valor)
                     },
@@ -581,6 +583,8 @@ private fun ContenidoPadron(
     onEstadoSeleccionado: (String?) -> Unit,
     onInstitucionSeleccionada: (String?) -> Unit,
     onAbrirInstituciones: () -> Unit,
+    onTamanoSeleccionado: (Int) -> Unit,
+    onCargarMas: () -> Unit,
     onCopiar: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -642,24 +646,28 @@ private fun ContenidoPadron(
         }
 
         item(key = "cabecera-resultados") {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "RESULTADOS",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Slate500,
-                    letterSpacing = 1.5.sp,
-                    modifier = Modifier.weight(1f)
-                )
-                Text(
-                    text = "${formatearEntero(estado.resultadosVisibles)}" +
-                        if (estado.limiteAlcanzado) " de ${PadronUiState.LIMITE_BUSQUEDA}+" else "",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = Slate500
+            Column(modifier = Modifier.padding(horizontal = 20.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "RESULTADOS",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Slate500,
+                        letterSpacing = 1.5.sp,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        text = "${formatearEntero(estado.resultadosVisibles)}" +
+                            if (estado.hayMas) "+" else "",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Slate500
+                    )
+                }
+                SelectorTamanoPagina(
+                    seleccionado = estado.tamanoPagina,
+                    onSeleccionar = onTamanoSeleccionado
                 )
             }
         }
@@ -681,6 +689,53 @@ private fun ContenidoPadron(
                     modifier = Modifier.padding(horizontal = 16.dp)
                 )
             }
+        }
+
+        if (estado.hayMas) {
+            item(key = "cargar-mas") {
+                OutlinedButton(
+                    onClick = onCargarMas,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                ) {
+                    Icon(Icons.Rounded.ExpandMore, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Cargar ${estado.tamanoPagina} más", style = MaterialTheme.typography.labelLarge)
+                }
+            }
+        }
+    }
+}
+
+/** Número de filas por página (20 / 50 / 100) en chips compactos. */
+@Composable
+private fun SelectorTamanoPagina(seleccionado: Int, onSeleccionar: (Int) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = "POR PÁGINA",
+            style = MaterialTheme.typography.labelSmall,
+            color = Slate400,
+            letterSpacing = 1.sp
+        )
+        listOf(20, 50, 100).forEach { tamano ->
+            FilterChip(
+                selected = seleccionado == tamano,
+                onClick = { onSeleccionar(tamano) },
+                label = {
+                    Text(
+                        text = "$tamano",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = if (seleccionado == tamano) FontWeight.Bold else FontWeight.Normal
+                    )
+                },
+                shape = RoundedCornerShape(50)
+            )
         }
     }
 }
