@@ -1,0 +1,32 @@
+# ---------------------------------------------------------------- Android / Gradle
+*.iml
+.gradle/
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+local.properties
+*.apk
+*.aab
+*.dex
+out/
+
+# ---------------------------------------------------------------- Android Studio
+.idea/
+*.hprof
+
+# ---------------------------------------------------------------- Datos del padrón
+# El Excel contiene datos personales de trabajadores del estado: NUNCA debe subirse.
+*.xls
+*.xlsb
+*.xlsm
+*.xlsx
+*.csv
+*.ods
+PADRON*.xls
+PADRON*.xlsx
+
+# ---------------------------------------------------------------- Sistema
+.DS_Store
+Thumbs.db
+desktop.ini
