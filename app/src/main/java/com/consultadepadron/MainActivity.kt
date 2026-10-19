@@ -12,6 +12,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -29,6 +30,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -36,6 +38,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -52,6 +55,7 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Error
+import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.Search
@@ -69,7 +73,6 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -82,7 +85,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -94,10 +96,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
@@ -185,6 +189,10 @@ private fun ConsultaPadronPantalla(viewModel: PadronViewModel) {
     var mostrarInstituciones by remember { mutableStateOf(false) }
     var mostrarGestor by remember { mutableStateOf(false) }
     var periodoAEliminar by remember { mutableStateOf<String?>(null) }
+    var buscadorEnfocado by remember { mutableStateOf(false) }
+
+    // Con el teclado abierto la cabecera y los KPIs se compactan para dejar ver resultados.
+    val modoBusqueda = buscadorEnfocado || estado.filtro.query.isNotBlank()
 
     val selectorExcel = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -212,9 +220,11 @@ private fun ConsultaPadronPantalla(viewModel: PadronViewModel) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .imePadding()
         ) {
             CabeceraApp(
                 estado = estado,
+                compacta = modoBusqueda,
                 onPeriodoSeleccionado = viewModel::seleccionarPeriodo,
                 onImportar = { lanzarSelector() },
                 onGestionar = { mostrarGestor = true }
@@ -229,16 +239,25 @@ private fun ConsultaPadronPantalla(viewModel: PadronViewModel) {
                 Buscador(
                     query = estado.filtro.query,
                     onQuery = viewModel::buscar,
+                    onFocusChanged = { buscadorEnfocado = it },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                        .padding(
+                            start = 16.dp,
+                            end = 16.dp,
+                            top = if (modoBusqueda) 8.dp else 12.dp,
+                            bottom = 8.dp
+                        )
                 )
 
                 ContenidoPadron(
                     estado = estado,
+                    modoBusqueda = modoBusqueda,
                     onEstadoSeleccionado = viewModel::filtrarPorEstado,
                     onInstitucionSeleccionada = viewModel::filtrarPorInstitucion,
                     onAbrirInstituciones = { mostrarInstituciones = true },
+                    onTamanoSeleccionado = viewModel::cambiarTamanoPagina,
+                    onCargarMas = viewModel::cargarMas,
                     onCopiar = { valor ->
                         copiarAlPortapapeles(contexto, valor)
                     },
@@ -326,6 +345,7 @@ private fun ConsultaPadronPantalla(viewModel: PadronViewModel) {
 @Composable
 private fun CabeceraApp(
     estado: PadronUiState,
+    compacta: Boolean,
     onPeriodoSeleccionado: (String) -> Unit,
     onImportar: () -> Unit,
     onGestionar: () -> Unit
@@ -339,24 +359,22 @@ private fun CabeceraApp(
             modifier = Modifier
                 .fillMaxWidth()
                 .statusBarsPadding()
-                .padding(start = 20.dp, end = 12.dp, top = 8.dp, bottom = 16.dp)
+                .padding(
+                    start = 20.dp,
+                    end = 12.dp,
+                    top = 4.dp,
+                    bottom = if (compacta) 10.dp else 16.dp
+                )
+                .animateContentSize()
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "CONSULTA DE PADRÓN",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Slate400,
-                        letterSpacing = 2.sp
-                    )
-                    Text(
-                        text = estado.periodoSeleccionado ?: "Sin periodo cargado",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = Blanco,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
+                Text(
+                    text = "CONSULTA DE PADRÓN",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Slate400,
+                    letterSpacing = 2.sp,
+                    modifier = Modifier.weight(1f)
+                )
                 IconButton(onClick = onImportar) {
                     Icon(Icons.Rounded.UploadFile, "Importar padrón", tint = Blanco)
                 }
@@ -365,69 +383,121 @@ private fun CabeceraApp(
                 }
             }
 
-            Spacer(Modifier.height(12.dp))
-
-            SelectorPeriodo(estado = estado, onPeriodoSeleccionado = onPeriodoSeleccionado)
-
-            Spacer(Modifier.height(10.dp))
-
-            Text(
-                text = buildString {
-                    append("${formatearEntero(estado.kpis.total)} registros")
-                    append("  ·  ${estado.periodos.size} ")
-                    append(if (estado.periodos.size == 1) "periodo" else "periodos")
-                    append("  ·  base local")
-                },
-                style = MaterialTheme.typography.labelSmall,
-                color = Slate400
+            SelectorPeriodo(
+                estado = estado,
+                compacta = compacta,
+                onPeriodoSeleccionado = onPeriodoSeleccionado
             )
+
+            AnimatedVisibility(visible = !compacta) {
+                Text(
+                    text = buildString {
+                        append("${formatearEntero(estado.kpis.total)} registros")
+                        append("  ·  ${estado.periodos.size} ")
+                        append(if (estado.periodos.size == 1) "periodo" else "periodos")
+                        append("  ·  base local")
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Slate400,
+                    modifier = Modifier.padding(top = 10.dp, start = 2.dp)
+                )
+            }
         }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SelectorPeriodo(estado: PadronUiState, onPeriodoSeleccionado: (String) -> Unit) {
+private fun SelectorPeriodo(
+    estado: PadronUiState,
+    compacta: Boolean,
+    onPeriodoSeleccionado: (String) -> Unit
+) {
     var expandido by remember { mutableStateOf(false) }
+    val foco = LocalFocusManager.current
 
     ExposedDropdownMenuBox(
         expanded = expandido,
-        onExpandedChange = { expandido = it },
+        onExpandedChange = { abierto ->
+            expandido = abierto
+            if (abierto) foco.clearFocus()
+        },
         modifier = Modifier.fillMaxWidth()
     ) {
-        OutlinedTextField(
-            value = estado.periodoSeleccionado ?: "",
-            onValueChange = {},
-            readOnly = true,
-            singleLine = true,
-            label = { Text("Periodo del padrón") },
-            leadingIcon = {
-                Icon(Icons.Rounded.CalendarMonth, null, tint = Slate300, modifier = Modifier.size(20.dp))
-            },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandido) },
-            shape = RoundedCornerShape(12.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedContainerColor = AzulPizarra,
-                unfocusedContainerColor = AzulPizarra,
-                focusedBorderColor = Slate400,
-                unfocusedBorderColor = Slate700,
-                focusedLabelColor = Slate300,
-                unfocusedLabelColor = Slate400,
-                focusedLeadingIconColor = Blanco,
-                unfocusedLeadingIconColor = Slate400,
-                focusedTextColor = Blanco,
-                unfocusedTextColor = Blanco,
-                cursorColor = Blanco
-            ),
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = Color.White.copy(alpha = 0.06f),
+            border = BorderStroke(1.dp, Slate700),
             modifier = Modifier
                 .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
                 .fillMaxWidth()
-        )
+        ) {
+            Row(
+                modifier = Modifier.padding(
+                    start = 12.dp,
+                    end = 12.dp,
+                    top = if (compacta) 8.dp else 10.dp,
+                    bottom = if (compacta) 8.dp else 10.dp
+                ),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color.White.copy(alpha = 0.08f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Rounded.CalendarMonth,
+                        null,
+                        tint = Slate300,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                Spacer(Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    if (!compacta) {
+                        Text(
+                            text = "PERIODO ACTIVO",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Slate400,
+                            letterSpacing = 1.5.sp
+                        )
+                    }
+                    Text(
+                        text = estado.periodoSeleccionado ?: "Sin periodo cargado",
+                        style = if (compacta) {
+                            MaterialTheme.typography.titleMedium
+                        } else {
+                            MaterialTheme.typography.titleLarge
+                        },
+                        color = Blanco,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Icon(
+                    Icons.Rounded.ExpandMore,
+                    "Cambiar periodo",
+                    tint = Slate300,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+        }
 
         ExposedDropdownMenu(
             expanded = expandido,
             onDismissRequest = { expandido = false }
         ) {
+            if (estado.periodos.isEmpty()) {
+                DropdownMenuItem(
+                    text = { Text("Sin periodos cargados", color = Slate500) },
+                    onClick = {},
+                    enabled = false
+                )
+            }
             estado.periodos.forEach { periodo ->
                 DropdownItemPeriodo(
                     nombre = periodo.nombre,
@@ -472,19 +542,29 @@ private fun DropdownItemPeriodo(
 // ------------------------------------------------------------------ buscador
 
 @Composable
-private fun Buscador(query: String, onQuery: (String) -> Unit, modifier: Modifier = Modifier) {
+private fun Buscador(
+    query: String,
+    onQuery: (String) -> Unit,
+    onFocusChanged: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
     val foco = LocalFocusManager.current
     OutlinedTextField(
         value = query,
         onValueChange = onQuery,
-        modifier = modifier,
+        modifier = modifier.onFocusChanged { onFocusChanged(it.isFocused) },
         singleLine = true,
         shape = RoundedCornerShape(14.dp),
         placeholder = { Text("DNI, código modular, apellido o nombre") },
         leadingIcon = { Icon(Icons.Rounded.Search, null, tint = Slate500) },
         trailingIcon = {
             if (query.isNotEmpty()) {
-                IconButton(onClick = { onQuery("") }) {
+                IconButton(
+                    onClick = {
+                        onQuery("")
+                        foco.clearFocus()
+                    }
+                ) {
                     Icon(Icons.Rounded.Close, "Limpiar búsqueda", tint = Slate500)
                 }
             }
@@ -499,19 +579,54 @@ private fun Buscador(query: String, onQuery: (String) -> Unit, modifier: Modifie
 @Composable
 private fun ContenidoPadron(
     estado: PadronUiState,
+    modoBusqueda: Boolean,
     onEstadoSeleccionado: (String?) -> Unit,
     onInstitucionSeleccionada: (String?) -> Unit,
     onAbrirInstituciones: () -> Unit,
+    onTamanoSeleccionado: (Int) -> Unit,
+    onCargarMas: () -> Unit,
     onCopiar: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val listaState = rememberLazyListState()
+    var resumenExpandido by rememberSaveable { mutableStateOf(true) }
+    var resumenColapsadoPorBusqueda by remember { mutableStateOf(false) }
+
+    // Al entrar en modo búsqueda el resumen se pliega para ganar altura; al salir vuelve
+    // a abrirse solo si fue este cambio automático el que lo cerró.
+    LaunchedEffect(modoBusqueda) {
+        if (modoBusqueda && resumenExpandido) {
+            resumenExpandido = false
+            resumenColapsadoPorBusqueda = true
+        } else if (!modoBusqueda && resumenColapsadoPorBusqueda) {
+            resumenExpandido = true
+            resumenColapsadoPorBusqueda = false
+        }
+    }
+
+    // Mientras se escribe, los resultados suben al primer plano del listado: la cabecera
+    // y los filtros quedan por encima, fuera del área que ocupa el teclado.
+    LaunchedEffect(estado.filtro.query) {
+        if (estado.filtro.query.isNotBlank()) {
+            listaState.animateScrollToItem(2)
+        }
+    }
+
     LazyColumn(
+        state = listaState,
         modifier = modifier.fillMaxWidth(),
         contentPadding = PaddingValues(bottom = 28.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        item(key = "kpis") {
-            KpiGrid(estado, modifier = Modifier.padding(horizontal = 16.dp))
+        item(key = "resumen") {
+            ModuloResumen(
+                estado = estado,
+                expandido = resumenExpandido,
+                onToggle = {
+                    resumenExpandido = !resumenExpandido
+                    resumenColapsadoPorBusqueda = false
+                }
+            )
         }
 
         item(key = "filtros") {
@@ -531,24 +646,28 @@ private fun ContenidoPadron(
         }
 
         item(key = "cabecera-resultados") {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "RESULTADOS",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Slate500,
-                    letterSpacing = 1.5.sp,
-                    modifier = Modifier.weight(1f)
-                )
-                Text(
-                    text = "${formatearEntero(estado.resultadosVisibles)}" +
-                        if (estado.limiteAlcanzado) " de ${PadronUiState.LIMITE_BUSQUEDA}+" else "",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = Slate500
+            Column(modifier = Modifier.padding(horizontal = 20.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "RESULTADOS",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Slate500,
+                        letterSpacing = 1.5.sp,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        text = "${formatearEntero(estado.resultadosVisibles)}" +
+                            if (estado.hayMas) "+" else "",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Slate500
+                    )
+                }
+                SelectorTamanoPagina(
+                    seleccionado = estado.tamanoPagina,
+                    onSeleccionar = onTamanoSeleccionado
                 )
             }
         }
@@ -571,10 +690,114 @@ private fun ContenidoPadron(
                 )
             }
         }
+
+        if (estado.hayMas) {
+            item(key = "cargar-mas") {
+                OutlinedButton(
+                    onClick = onCargarMas,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                ) {
+                    Icon(Icons.Rounded.ExpandMore, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Cargar ${estado.tamanoPagina} más", style = MaterialTheme.typography.labelLarge)
+                }
+            }
+        }
+    }
+}
+
+/** Número de filas por página (20 / 50 / 100) en chips compactos. */
+@Composable
+private fun SelectorTamanoPagina(seleccionado: Int, onSeleccionar: (Int) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = "POR PÁGINA",
+            style = MaterialTheme.typography.labelSmall,
+            color = Slate400,
+            letterSpacing = 1.sp
+        )
+        listOf(20, 50, 100).forEach { tamano ->
+            FilterChip(
+                selected = seleccionado == tamano,
+                onClick = { onSeleccionar(tamano) },
+                label = {
+                    Text(
+                        text = "$tamano",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = if (seleccionado == tamano) FontWeight.Bold else FontWeight.Normal
+                    )
+                },
+                shape = RoundedCornerShape(50)
+            )
+        }
     }
 }
 
 // ------------------------------------------------------------------ KPIs
+
+/**
+ * Módulo plegable con el resumen del padrón. Se contrae automáticamente cuando el
+ * buscador está activo (teclado abierto) y puede reabrirse con un toque.
+ */
+@Composable
+private fun ModuloResumen(
+    estado: PadronUiState,
+    expandido: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .animateContentSize()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .clickable(onClick = onToggle)
+                .padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "RESUMEN DEL PADRÓN",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Slate500,
+                    letterSpacing = 1.5.sp
+                )
+                if (!expandido) {
+                    Text(
+                        text = "${formatearEntero(estado.kpis.total)} registros" +
+                            "  ·  ${estado.kpis.porcentajePermitidos} % aptos",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Slate500,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            Icon(
+                imageVector = if (expandido) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                contentDescription = if (expandido) "Ocultar resumen" else "Mostrar resumen",
+                tint = Slate500,
+                modifier = Modifier.size(22.dp)
+            )
+        }
+
+        AnimatedVisibility(visible = expandido) {
+            KpiGrid(estado = estado, modifier = Modifier.padding(top = 10.dp))
+        }
+    }
+}
 
 @Composable
 private fun KpiGrid(estado: PadronUiState, modifier: Modifier = Modifier) {

@@ -36,6 +36,15 @@ data class Filtro(
     val query: String = ""
 )
 
+/** Cuántas filas se muestran por página y cuántos bloques ya se cargaron. */
+data class Paginacion(
+    val tamano: Int = 20,
+    val bloque: Int = 0
+) {
+    /** ConsultaRoom con +1 para detectar si hay más filas después de este bloque. */
+    val limite: Int get() = (bloque + 1) * tamano
+}
+
 /** Estado en vivo del diálogo de importación. */
 data class ProgresoImportacion(
     val periodo: String,
@@ -52,15 +61,12 @@ data class PadronUiState(
     val kpis: Kpis = Kpis(),
     val resultados: List<TrabajadorEntity> = emptyList(),
     val cargando: Boolean = false,
-    val importacion: ProgresoImportacion? = null
+    val importacion: ProgresoImportacion? = null,
+    val tamanoPagina: Int = 20,
+    val hayMas: Boolean = false
 ) {
     val hayPadrones: Boolean get() = periodos.isNotEmpty()
     val resultadosVisibles: Int get() = resultados.size
-    val limiteAlcanzado: Boolean get() = resultados.size >= LIMITE_BUSQUEDA
-
-    companion object {
-        const val LIMITE_BUSQUEDA = 100
-    }
 }
 
 private data class Base(
@@ -74,7 +80,18 @@ private data class Base(
 private data class Panel(
     val filtro: Filtro,
     val cargando: Boolean,
-    val importacion: ProgresoImportacion?
+    val importacion: ProgresoImportacion?,
+    val tamanoPagina: Int,
+    val hayMas: Boolean
+)
+
+/** Consulta combinada: cualquier cambio de periodo, filtro, paginación o versión dispara recarga. */
+private data class Consulta(
+    val periodo: String,
+    val filtro: Filtro,
+    val version: Long,
+    val bloque: Int,
+    val tamano: Int
 )
 
 @OptIn(kotlinx.coroutines.FlowPreview::class)
@@ -91,6 +108,20 @@ class PadronViewModel(
     private val _resultados = MutableStateFlow<List<TrabajadorEntity>>(emptyList())
     private val _cargando = MutableStateFlow(false)
     private val _importacion = MutableStateFlow<ProgresoImportacion?>(null)
+    private val _paginacion = MutableStateFlow(Paginacion())
+
+    /**
+     * Indica si la última consulta devolvió más filas que las mostradas: sirve para
+     * pintar el botón "Cargar más" al final del listado.
+     */
+    private val _hayMas = MutableStateFlow(false)
+
+    /**
+     * Se incrementa al terminar una importación para forzar la recarga aunque el periodo
+     * seleccionado siga siendo el mismo. Sin esto, el primer import seleccionaba el periodo
+     * vacío antes de insertar las filas y la UI se quedaba en 0 hasta reiniciar la app.
+     */
+    private val _recarga = MutableStateFlow(0L)
 
     private val _mensajes = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val mensajes: SharedFlow<String> = _mensajes.asSharedFlow()
@@ -99,8 +130,8 @@ class PadronViewModel(
         combine(_periodos, _periodo, _instituciones, _kpis, _resultados) { periodos, periodo, inst, kpis, res ->
             Base(periodos, periodo, inst, kpis, res)
         },
-        combine(_filtro, _cargando, _importacion) { filtro, cargando, importacion ->
-            Panel(filtro, cargando, importacion)
+        combine(_filtro, _cargando, _importacion, _hayMas, _paginacion) { filtro, cargando, importacion, hayMas, pag ->
+            Panel(filtro, cargando, importacion, pag.tamano, hayMas)
         }
     ) { base, panel ->
         PadronUiState(
@@ -111,7 +142,9 @@ class PadronViewModel(
             kpis = base.kpis,
             resultados = base.resultados,
             cargando = panel.cargando,
-            importacion = panel.importacion
+            importacion = panel.importacion,
+            tamanoPagina = panel.tamanoPagina,
+            hayMas = panel.hayMas
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), PadronUiState())
 
@@ -120,42 +153,74 @@ class PadronViewModel(
         viewModelScope.launch {
             repositorio.periodosFlow.collect { lista ->
                 _periodos.value = lista
+
+                // Mientras se importa no se auto-selecciona el periodo recién registrado:
+                // todavía no tiene filas y la UI mostraría 0. Al terminar, [importar] lo
+                // selecciona y fuerza la recarga con los datos completos.
+                if (_importacion.value != null) return@collect
+
                 val actual = _periodo.value
-                if (actual == null || lista.none { it.nombre == actual }) {
-                    _periodo.value = lista.firstOrNull()?.nombre
+                val seleccionado = when {
+                    actual != null && lista.any { it.nombre == actual } -> actual
+                    else -> lista.firstOrNull()?.nombre
+                }
+
+                if (seleccionado != actual) {
+                    _filtro.value = Filtro()
+                    _periodo.value = seleccionado
+
+                    if (seleccionado == null) {
+                        _instituciones.value = emptyList()
+                        _kpis.value = Kpis()
+                        _resultados.value = emptyList()
+                        _cargando.value = false
+                    }
                 }
             }
         }
 
-        // 2. Cambio de periodo: recarga instituciones + KPIs + listado base.
+        // 2. Instituciones del periodo (se refrescan al cambiar de periodo o tras importar).
         viewModelScope.launch {
-            _periodo.filterNotNull().distinctUntilChanged().collectLatest { periodo ->
-                _filtro.value = Filtro()
-                _cargando.value = true
-                _instituciones.value = repositorio.instituciones(periodo)
-                _kpis.value = repositorio.kpis(periodo, null)
-                _resultados.value = repositorio.buscar(periodo, null, null, "")
-                _cargando.value = false
-            }
+            combine(_periodo.filterNotNull(), _recarga) { periodo, version -> periodo to version }
+                .distinctUntilChanged()
+                .collectLatest { (periodo, _) ->
+                    _instituciones.value = repositorio.instituciones(periodo)
+                }
         }
 
-        // 3. Filtros combinados con debounce de 250 ms para escribir sin parpadear.
+        // 3. KPIs + resultados: una sola consulta combinada con debounce de 250 ms.
         viewModelScope.launch {
-            _filtro
-                .debounce { filtro -> if (filtro.query.isBlank()) 0L else 250L }
+            combine(_periodo, _filtro, _recarga, _paginacion) { periodo, filtro, version, pag ->
+                periodo?.let { Consulta(it, filtro, version, pag.bloque, pag.tamano) }
+            }
+                .filterNotNull()
+                .debounce { consulta -> if (consulta.filtro.query.isBlank()) 0L else 250L }
                 .distinctUntilChanged()
-                .collectLatest { filtro ->
-                    val periodo = _periodo.value ?: return@collectLatest
+                .collectLatest { consulta ->
                     _cargando.value = true
-                    _kpis.value = repositorio.kpis(periodo, filtro.institucion)
-                    _resultados.value = repositorio.buscar(
-                        periodo = periodo,
-                        institucion = filtro.institucion,
-                        estado = filtro.estado,
-                        query = filtro.query,
-                        limite = PadronUiState.LIMITE_BUSQUEDA
-                    )
-                    _cargando.value = false
+                    try {
+                        _kpis.value = repositorio.kpis(
+                            consulta.periodo,
+                            consulta.filtro.institucion
+                        )
+                        // Se pide un bloque extra (+1) solo para saber si hay más filas
+                        // después de la última mostrada; ese sobrante se descarta.
+                        val filas = repositorio.buscar(
+                            periodo = consulta.periodo,
+                            institucion = consulta.filtro.institucion,
+                            estado = consulta.filtro.estado,
+                            query = consulta.filtro.query,
+                            limite = consulta.bloque * consulta.tamano + consulta.tamano + 1
+                        )
+                        _hayMas.value = filas.size > consulta.bloque * consulta.tamano + consulta.tamano
+                        _resultados.value = if (_hayMas.value) {
+                            filas.dropLast(1)
+                        } else {
+                            filas
+                        }
+                    } finally {
+                        _cargando.value = false
+                    }
                 }
         }
     }
@@ -164,21 +229,40 @@ class PadronViewModel(
 
     fun buscar(texto: String) {
         _filtro.update { it.copy(query = texto) }
+        reiniciarBloque()
     }
 
     fun filtrarPorEstado(estado: String?) {
         _filtro.update { it.copy(estado = estado) }
+        reiniciarBloque()
     }
 
     fun filtrarPorInstitucion(institucion: String?) {
         _filtro.update { it.copy(institucion = institucion) }
+        reiniciarBloque()
     }
 
     fun limpiarFiltros() {
         _filtro.value = Filtro()
+        reiniciarBloque()
+    }
+
+    fun cambiarTamanoPagina(tamano: Int) {
+        _paginacion.update { it.copy(tamano = tamano, bloque = 0) }
+    }
+
+    fun cargarMas() {
+        _paginacion.update { it.copy(bloque = it.bloque + 1) }
+    }
+
+    private fun reiniciarBloque() {
+        _paginacion.update { it.copy(bloque = 0) }
     }
 
     fun seleccionarPeriodo(nombre: String) {
+        if (_periodo.value == nombre) return
+        _filtro.value = Filtro()
+        reiniciarBloque()
         _periodo.value = nombre
     }
 
@@ -197,13 +281,25 @@ class PadronViewModel(
                     _importacion.value = (_importacion.value ?: ProgresoImportacion(periodo))
                         .copy(leidas = leidas, guardadas = guardadas)
                 }
+                _filtro.value = Filtro()
+                reiniciarBloque()
                 _periodo.value = periodo
+
+                // Aunque el periodo ya estuviera seleccionado (p. ej. una reimportación),
+                // la versión fuerza a leer de nuevo KPIs, instituciones y resultados.
+                _recarga.update { it + 1 }
+
                 _mensajes.emit(
                     "Importación completa · ${resultado.filasGuardadas} registros guardados"
                 )
             } catch (e: Exception) {
                 // Si el libro se leyó pero falló a medias, el periodo queda incompleto: se limpia.
                 runCatching { repositorio.eliminarPeriodo(periodo) }
+                if (_periodo.value == periodo) {
+                    _periodo.value = _periodos.value
+                        .firstOrNull { it.nombre != periodo }
+                        ?.nombre
+                }
                 _mensajes.emit(e.message ?: "No se pudo importar el archivo.")
             } finally {
                 _importacion.value = null
